@@ -18,6 +18,9 @@
 
 #include "platform/OSXScreen.h"
 
+#include <pthread.h>
+#include <sys/qos.h>
+
 #include "base/EventQueue.h"
 #include "client/Client.h"
 #include "platform/OSXClipboard.h"
@@ -107,6 +110,11 @@ OSXScreen::OSXScreen(IEventQueue* events, bool isPrimary, bool autoShowHideCurso
 	try {
 		m_displayID   = CGMainDisplayID();
 		updateScreenShape(m_displayID, 0);
+		// Ask for the user-interactive tier on the thread that pumps input
+		// events. Without it this process sits in the default tier while the
+		// foreground app it is forwarding for sits above it.
+		pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+
 		m_screensaver = new OSXScreenSaver(m_events, getEventTarget());
 		m_keyState	  = new OSXKeyState(m_events);
 

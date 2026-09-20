@@ -29,6 +29,11 @@
     <string>@BARRIER_VERSION@</string>
     <key>NSInputMonitoringUsageDescription</key>
     <string>Barrier reads this Mac's keyboard and trackpad so it can send them to your other computer.</string>
+    <!-- Barrier forwards input in real time. App Nap would throttle timers
+         and I/O whenever its window is not in front, which is exactly when it
+         is doing its job. //-->
+    <key>NSAppSleepDisabled</key>
+    <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>

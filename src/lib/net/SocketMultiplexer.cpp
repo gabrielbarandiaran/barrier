@@ -18,6 +18,11 @@
 
 #include "net/SocketMultiplexer.h"
 
+#if defined(__APPLE__)
+#include <pthread.h>
+#include <sys/qos.h>
+#endif
+
 #include "net/ISocketMultiplexerJob.h"
 #include "mt/CondVar.h"
 #include "mt/Lock.h"
@@ -57,7 +62,17 @@ SocketMultiplexer::SocketMultiplexer() :
     m_jobListLockLocker(NULL)
 {
     // start thread
-    m_thread = new Thread([this](){ service_thread(); });
+    m_thread = new Thread([this](){
+#if defined(__APPLE__)
+        // This thread carries every keystroke and mouse movement. Without a
+        // QoS class macOS leaves it in the default tier, below the
+        // user-interactive tier that foreground UI runs in, and applies
+        // background policy to its I/O. Nothing else in this process asks for
+        // a QoS class.
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
+        service_thread();
+    });
 }
 
 SocketMultiplexer::~SocketMultiplexer()
