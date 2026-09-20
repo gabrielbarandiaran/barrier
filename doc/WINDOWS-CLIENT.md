@@ -10,12 +10,17 @@ The MacBook side is in [SETUP-mac-to-windows.md](SETUP-mac-to-windows.md).
 
 ## 1. Download it
 
-Go to the Actions tab of the repository:
+On the Windows PC, paste this into any browser:
 
-<https://github.com/gabrielbarandiaran/barrier/actions/workflows/windows-client.yml>
+```
+https://github.com/gabrielbarandiaran/barrier/releases/latest/download/barrier-client-windows.zip
+```
 
-Open the newest green run, scroll to **Artifacts**, and download
-**`barrier-client-windows`**. Unzip it anywhere — the Desktop is fine.
+It downloads straight away — no GitHub account, no sign-in, no navigating the
+Actions tab. The link always serves the newest build; CI refreshes it on every
+push.
+
+Unzip it anywhere. The Desktop is fine.
 
 You get:
 
@@ -81,7 +86,7 @@ which let any local user get SYSTEM. It has been removed.
 
 ## 4. Updating
 
-Download the newest artifact and replace the files. If you set up autostart, run
+Download the same link again and replace the files. If you set up autostart, run
 `install-windows-autostart.bat` again afterwards so the new client is copied into
 place.
 
