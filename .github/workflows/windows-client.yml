@@ -10,6 +10,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -105,3 +108,17 @@ jobs:
           name: barrier-client-windows
           path: dist-out/barrier-client
           if-no-files-found: error
+
+      # Actions artifacts need a GitHub login to download and expire after 90
+      # days. Publishing to a fixed release tag gives a permanent link that
+      # works in any browser with no account:
+      #   /releases/latest/download/barrier-client-windows.zip
+      - name: Publish to the rolling release
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Compress-Archive -Path dist-out/barrier-client -DestinationPath barrier-client-windows.zip -Force
+          gh release upload windows-client barrier-client-windows.zip --clobber --repo $env:GITHUB_REPOSITORY
+          Write-Host 'Updated https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download/barrier-client-windows.zip'
