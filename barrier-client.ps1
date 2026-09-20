@@ -49,6 +49,17 @@ if (-not $server) {
     }
 }
 
+# Hostnames, IPv4, IPv6 and an optional :port -- nothing that could be taken
+# as a shell metacharacter or as an extra command line argument. server.txt is
+# writable by any process running as this user, so validate it on the way in as
+# well as when it is typed.
+if ($server -notmatch '^[A-Za-z0-9._:\[\]-]+$') {
+    Fail "Refusing to use '$server' as a server address."
+    Fail 'Expected a hostname or IP address, optionally with :port.'
+    Read-Host 'Press Enter to close'
+    exit 1
+}
+
 New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
 Set-Content -Path $serverFile -Value $server -Encoding ASCII
 
@@ -66,24 +77,39 @@ function Trust-Fingerprint([string]$withColons) {
 }
 
 # Barrier splits its log across two streams: FATAL/ERROR/WARNING go to stderr,
-# everything else (including the peer fingerprint, which is a NOTE, and
-# "connected to server", which is a PRINT) goes to stdout. Run through cmd with
-# 2>&1 so both arrive on one pipe; reading only one stream misses half the
-# conversation.
-function Start-Merged([string]$extraArgs) {
-    $inner = '"' + $exe + '" --name ' + $screenName + ' --no-tray ' + $extraArgs + ' ' + $server + ' 2>&1'
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName               = $env:ComSpec
-    $psi.Arguments              = '/s /c "' + $inner + '"'
-    $psi.UseShellExecute        = $false
-    $psi.RedirectStandardOutput = $true
-    $psi.CreateNoWindow         = $true
-    return [System.Diagnostics.Process]::Start($psi)
+# everything else (the peer fingerprint, which is a NOTE, and "connected to
+# server", which is a PRINT) goes to stdout. Both matter here, so capture both.
+#
+# Deliberately NOT routed through cmd.exe with 2>&1: that would put a
+# user-supplied address on a shell command line. Start-Process takes an argument
+# array, which is passed to the process without a shell parsing it.
+$probeOut = Join-Path $env:TEMP 'barrier-probe-out.log'
+$probeErr = Join-Path $env:TEMP 'barrier-probe-err.log'
+
+function Start-Probe {
+    foreach ($f in @($probeOut, $probeErr)) {
+        Remove-Item $f -ErrorAction SilentlyContinue
+        New-Item -ItemType File -Path $f -Force | Out-Null
+    }
+    return Start-Process -FilePath $exe `
+        -ArgumentList @('--name', $screenName, '--no-tray', '--no-restart', $server) `
+        -NoNewWindow -PassThru `
+        -RedirectStandardOutput $probeOut -RedirectStandardError $probeErr
 }
 
-function Stop-Tree($proc) {
+function Read-ProbeLines {
+    $lines = @()
+    foreach ($f in @($probeOut, $probeErr)) {
+        if (Test-Path $f) {
+            $lines += @(Get-Content $f -ErrorAction SilentlyContinue)
+        }
+    }
+    return $lines
+}
+
+function Stop-Probe($proc) {
     if ($null -eq $proc) { return }
-    try { if (-not $proc.HasExited) { & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null } } catch { }
+    try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
 }
 
 # --- pairing -----------------------------------------------------------------
@@ -91,7 +117,7 @@ function Stop-Tree($proc) {
 Write-Host ''
 Info "Checking the connection to $server ..."
 
-$probe     = Start-Merged '--no-restart'
+$probe     = Start-Probe
 $sha256    = $null
 $connected = $false
 $untrusted = $false
@@ -99,27 +125,24 @@ $refused   = $null
 $clock     = [Diagnostics.Stopwatch]::StartNew()
 
 while ($clock.Elapsed.TotalSeconds -lt 30) {
-    $line = $probe.StandardOutput.ReadLine()
-    if ($null -eq $line) { break }
+    # Scan everything seen so far, then decide. The fingerprint arrives on
+    # stdout and the rejection on stderr, so they must be considered together
+    # rather than acted on in arrival order.
+    foreach ($line in (Read-ProbeLines)) {
+        if ($line -match 'peer fingerprint \(SHA1\): ([0-9A-Fa-f:]+) \(SHA256\): ([0-9A-Fa-f:]+)') {
+            $sha256 = $Matches[2]
+        }
+        if ($line -match 'failed to verify server certificate fingerprint') { $untrusted = $true }
+        if ($line -match 'connected to server')                             { $connected = $true }
+        if ($line -match 'failed to connect to server: (.+)')               { $refused   = $Matches[1] }
+    }
 
-    if ($line -match 'peer fingerprint \(SHA1\): ([0-9A-Fa-f:]+) \(SHA256\): ([0-9A-Fa-f:]+)') {
-        $sha256 = $Matches[2]
-    }
-    elseif ($line -match 'failed to verify server certificate fingerprint') {
-        $untrusted = $true
-        break
-    }
-    elseif ($line -match 'connected to server') {
-        $connected = $true
-        break
-    }
-    elseif ($line -match 'failed to connect to server: (.+)') {
-        $refused = $Matches[1]
-        break
-    }
+    if ($untrusted -or $connected -or $refused) { break }
+    if ($probe.HasExited) { break }
+    Start-Sleep -Milliseconds 200
 }
 
-Stop-Tree $probe
+Stop-Probe $probe
 
 if ($untrusted -and $sha256) {
     Write-Host ''
