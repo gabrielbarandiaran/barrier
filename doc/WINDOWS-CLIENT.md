@@ -132,6 +132,59 @@ in the Target field and set it to run minimised.
 
 ---
 
+## 8. Start automatically at login
+
+Once the connection works, make it permanent:
+
+```bat
+install-windows-autostart.bat 192.168.3.79
+```
+
+From then on the client starts every time you log in, with no window and no
+clicking. It starts immediately too, so you do not need to log out to test it.
+
+You do not need to do anything to make it "keep looking" for the server: the
+client already retries about once a second, forever, and connects on its own
+whenever the MacBook appears. Sleep the Mac, reboot it, change networks — the PC
+reconnects by itself.
+
+What the script sets up:
+
+- `barrierc.exe` and its DLLs are copied to `%LOCALAPPDATA%\Barrier\bin`, so
+  autostart survives moving, rebuilding or deleting the repo.
+- A launcher in your Startup folder runs it with no console window and relaunches
+  it if the process ever dies.
+
+It installs nothing as a service and needs no administrator rights. It runs as
+you, in your own session.
+
+**The trade-off.** Because it runs in your session, the MacBook keyboard works
+once you are logged in, but **not on the lock screen or the sign-in screen**, and
+not over UAC prompts. Log in with the PC's own keyboard; Barrier takes over
+immediately after.
+
+Covering the sign-in screen is exactly what the old `barrierd` service did, and
+it did it by running as LocalSystem while accepting commands — including an
+"elevate" flag — over an unauthenticated loopback socket. Any local user could
+get SYSTEM through it. That is why it is gone, and why this runs in your session
+instead.
+
+To undo:
+
+```bat
+remove-windows-autostart.bat
+```
+
+That stops the client and removes it from Startup, but keeps
+`%LOCALAPPDATA%\Barrier\SSL`, so reinstalling does not mean exchanging
+fingerprints again.
+
+Check whether it is running:
+
+```bat
+tasklist | findstr barrierc
+```
+
 ## Troubleshooting
 
 **`cl.exe not found`** — you are in a plain `cmd` window. Use "x64 Native Tools
@@ -165,3 +218,15 @@ sc delete Barrier
 
 **Cannot reach the Mac at all** — check the MacBook's firewall allows incoming
 TCP 24800. Nothing needs opening on the Windows side; the client dials out.
+
+**Autostart is not working** — check the launcher is in place:
+```bat
+dir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
+```
+If `Barrier Client.vbs` is missing, re-run `install-windows-autostart.bat`. If it
+is there but nothing starts, some security software blocks `.vbs` from Startup;
+run the client from a shortcut with "Run: Minimized" instead.
+
+**The server address changed** — just re-run `install-windows-autostart.bat` with
+the new address. Better: give the MacBook a DHCP reservation on your router so it
+stops changing.
