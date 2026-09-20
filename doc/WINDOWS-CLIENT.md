@@ -1,255 +1,147 @@
-# Building and running the Windows client
+# Barrier client on Windows
 
-Copy-paste reference for the Windows PC. The PC is the **client**: it receives
-keyboard and mouse from the MacBook and never listens on the network itself.
+The PC receives keyboard and mouse from the MacBook. You do not need Visual
+Studio, CMake, vcpkg, or any build tools — GitHub builds the client on every
+push and you download the result.
 
-You only build `barrierc.exe`. No Qt, no GUI, no Bonjour SDK, and no background
-service — that service used to run as LocalSystem and take commands over an
-unauthenticated local socket, and it is gone.
-
-The MacBook side is covered in [SETUP-mac-to-windows.md](SETUP-mac-to-windows.md).
+The MacBook side is in [SETUP-mac-to-windows.md](SETUP-mac-to-windows.md).
 
 ---
 
-## 1. Install the prerequisites
+## 1. Download it
 
-- **Git** — https://git-scm.com/download/win
-- **CMake** — https://cmake.org/download/ (tick "Add CMake to the system PATH")
-- **Visual Studio 2017 or newer** with the **"Desktop development with C++"**
-  workload. The free Community edition is fine.
+Go to the Actions tab of the repository:
 
-## 2. Get the code
+<https://github.com/gabrielbarandiaran/barrier/actions/workflows/windows-client.yml>
 
-`--recursive` matters: the build needs the `gulrak-filesystem` submodule.
+Open the newest green run, scroll to **Artifacts**, and download
+**`barrier-client-windows`**. Unzip it anywhere — the Desktop is fine.
 
-```bat
-git clone --recursive -b security-hardening https://github.com/gabrielbarandiaran/barrier
-cd barrier
-```
+You get:
 
-Already cloned? Update instead:
-
-```bat
-git fetch origin
-git checkout security-hardening
-git pull
-git submodule update --init --recursive
-```
-
-## 3. Install OpenSSL via vcpkg
-
-One time. The last command compiles OpenSSL and takes a while.
-
-```bat
-git clone https://github.com/microsoft/vcpkg C:\vcpkg
-C:\vcpkg\bootstrap-vcpkg.bat
-C:\vcpkg\vcpkg install openssl:x64-windows
-```
-
-> This repo used to carry prebuilt OpenSSL 1.0.2l binaries, a 2017 release that
-> went end-of-life in 2019. They were deleted; the build now finds a current
-> OpenSSL the normal way.
-
-## 4. Build
-
-Open **"x64 Native Tools Command Prompt for VS"** from the Start menu — not a
-plain `cmd` window, or the compiler will not be on your PATH. Then, from the
-repository root:
-
-```bat
-build-windows-client.bat
-```
-
-That script configures and builds, checks the obvious failure modes, copies the
-OpenSSL DLLs next to the executable, and prints the run command.
-
-<details>
-<summary>Doing it by hand instead</summary>
-
-```bat
-cmake -S . -B build -A x64 ^
-  -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake ^
-  -DBARRIER_BUILD_GUI=OFF -DBARRIER_BUILD_INSTALLER=OFF -DBARRIER_BUILD_TESTS=OFF ^
-  -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-```
-</details>
-
-The result is **`build\bin\Release\barrierc.exe`**.
-
-## 5. First run — expect it to fail
-
-Replace the address with your MacBook's:
-
-```bat
-build\bin\Release\barrierc.exe --name windows 192.168.3.79
-```
-
-It will refuse the server and exit with `failed to verify server certificate
-fingerprint`. **That is correct.** Neither machine trusts the other yet, and a
-client that connected anyway would be a client an attacker could impersonate.
-
-This run generated the client's own certificate, which is what you need next.
-
-## 6. Trust each other, once
-
-Each machine wrote its own fingerprints to `Local.txt` and logged the SHA256 at
-startup:
-
-| | fingerprint directory |
+| file | |
 |---|---|
-| Windows | `%LOCALAPPDATA%\Barrier\SSL\Fingerprints\` |
-| macOS | `~/Library/Application Support/barrier/SSL/Fingerprints/` |
+| `barrier-client.bat` | **double-click this** |
+| `barrierc.exe` | the client |
+| `libssl-*.dll`, `libcrypto-*.dll` | OpenSSL, so it runs on a clean machine |
+| `install-windows-autostart.bat` | start at login |
+| `remove-windows-autostart.bat` | undo that |
 
-Open the Windows one:
+## 2. Double-click `barrier-client.bat`
 
-```bat
-explorer %LOCALAPPDATA%\Barrier\SSL\Fingerprints
+It asks for the MacBook's address the first time and remembers it:
+
+```
+What is the MacBook's address on your network?
+Server address: 192.168.3.79
 ```
 
-Copy the whole `v2:sha256:...` line each way:
+Then it connects and shows what it is doing.
 
-- **Windows `Local.txt`** → append to the Mac's `TrustedClients.txt`
-- **Mac `Local.txt`** → append to Windows' `TrustedServers.txt`
+**The first time it will say the server is not trusted** and show a fingerprint:
 
-One fingerprint per line, no trailing spaces. On the Mac, the GUI offers a
-dialog for the client half when it connects, which does the same thing.
+```
+ This server is not trusted yet.
 
-## 7. Run it for real
+ Its fingerprint is:
 
-Start the server on the MacBook, then:
+   39:E8:22:F4:FE:63:E0:F6:...
 
-```bat
-build\bin\Release\barrierc.exe --name windows 192.168.3.79
+ Trust this server? [y/N]
 ```
 
-Push the mouse off the right edge of the MacBook screen. Keyboard follows the
-pointer. `Cmd` acts as `Ctrl` on the PC, so Cmd+C and Cmd+V work as you expect.
+Compare it with the fingerprint the Mac shows, then press `y`. It connects
+straight away — no restart, no editing files, nothing copied between machines.
 
-Leave the window open — closing it disconnects the client. To keep it running
-without a console window, make a shortcut to `barrierc.exe` with the arguments
-in the Target field and set it to run minimised.
+That question appears **once per machine**. It is the only manual step, and it
+exists because without it any machine on your network could pretend to be your
+Mac and collect everything you type.
 
----
+Once it says **Connected**, push the mouse off the right edge of the MacBook
+screen. `Cmd` acts as `Ctrl` on the PC, so Cmd+C and Cmd+V work as expected.
 
-## 8. Start automatically at login
-
-Once the connection works, make it permanent:
+## 3. Make it automatic
 
 ```bat
 install-windows-autostart.bat 192.168.3.79
 ```
 
-From then on the client starts every time you log in, with no window and no
-clicking. It starts immediately too, so you do not need to log out to test it.
+Now it starts at every login with no window and no clicks. It retries about once
+a second forever, so it reconnects by itself whenever the Mac appears — after a
+reboot, waking from sleep, or changing networks.
 
-You do not need to do anything to make it "keep looking" for the server: the
-client already retries about once a second, forever, and connects on its own
-whenever the MacBook appears. Sleep the Mac, reboot it, change networks — the PC
-reconnects by itself.
+Undo with `remove-windows-autostart.bat`.
 
-What the script sets up:
+**One limitation:** this runs in your user session, so the MacBook keyboard works
+once you are logged in, but not on the lock screen or sign-in screen. Use Windows
+Hello or the PC's own keyboard to log in; Barrier takes over immediately after.
+The old background service covered the sign-in screen, but it did so by running
+as LocalSystem while accepting commands over an unauthenticated local socket,
+which let any local user get SYSTEM. It has been removed.
 
-- `barrierc.exe` and its DLLs are copied to `%LOCALAPPDATA%\Barrier\bin`, so
-  autostart survives moving, rebuilding or deleting the repo.
-- A launcher in your Startup folder runs it with no console window and relaunches
-  it if the process ever dies.
+## 4. Updating
 
-It installs nothing as a service and needs no administrator rights. It runs as
-you, in your own session.
+Download the newest artifact and replace the files. If you set up autostart, run
+`install-windows-autostart.bat` again afterwards so the new client is copied into
+place.
 
-**The trade-off.** Because it runs in your session, the MacBook keyboard works
-once you are logged in, but **not on the lock screen or the sign-in screen**, and
-not over UAC prompts. Log in with the PC's own keyboard; Barrier takes over
-immediately after.
+Your certificate and trusted fingerprints live in `%LOCALAPPDATA%\Barrier\SSL`
+and are never touched, so updating never means trusting the server again.
 
-Covering the sign-in screen is exactly what the old `barrierd` service did, and
-it did it by running as LocalSystem while accepting commands — including an
-"elevate" flag — over an unauthenticated loopback socket. Any local user could
-get SYSTEM through it. That is why it is gone, and why this runs in your session
-instead.
-
-To undo:
-
-```bat
-remove-windows-autostart.bat
-```
-
-That stops the client and removes it from Startup, but keeps
-`%LOCALAPPDATA%\Barrier\SSL`, so reinstalling does not mean exchanging
-fingerprints again.
-
-Check whether it is running:
-
-```bat
-tasklist | findstr barrierc
-```
-
-## 9. Updating later
-
-```bat
-update-windows.bat
-```
-
-From an "x64 Native Tools Command Prompt for VS", in the repo root. That is the
-whole update: it pulls, stops the running client, rebuilds, reinstalls into
-`%LOCALAPPDATA%\Barrier\bin` and restarts it.
-
-Stopping first is not optional — Windows will not overwrite a running `.exe`,
-and the autostart launcher relaunches the client a few seconds after it exits,
-so the script stops the launcher before the client.
-
-Use `update-windows.bat --no-pull` to rebuild what is already checked out.
-
-If you have local changes the script refuses to pull rather than trampling them.
-Commit or stash first.
-
-**Your certificate and trusted fingerprints are not touched.** They live in
-`%LOCALAPPDATA%\Barrier\SSL`, not in the build, so updating never means
-redoing the fingerprint exchange.
+---
 
 ## Troubleshooting
 
-**`cl.exe not found`** — you are in a plain `cmd` window. Use "x64 Native Tools
-Command Prompt for VS".
+**Nothing happens when I double-click** — Windows may have blocked the
+downloaded zip. Right-click the zip, Properties, tick **Unblock**, unzip again.
 
-**CMake cannot find OpenSSL** — step 3 was skipped, or vcpkg lives somewhere
-other than `C:\vcpkg`. Point the script at it:
-```bat
-set VCPKG_ROOT=D:\path\to\vcpkg
-build-windows-client.bat
-```
+**"failed to verify server certificate fingerprint" and no prompt** — you are
+running `barrierc.exe` directly instead of `barrier-client.bat`. The prompt lives
+in the launcher.
 
-**`Compatibility with CMake < 3.5 has been removed`** — you are on an old
-checkout. Pull the `security-hardening` branch; the version floors were raised.
+**It was working, now it silently does nothing** — autostart hides the window on
+purpose. Run `barrier-client.bat` by hand to see the log.
 
-**`libcrypto-3-x64.dll` missing on launch** — copy it and `libssl-3-x64.dll`
-from `C:\vcpkg\installed\x64-windows\bin\` into `build\bin\Release\`.
+**`unrecognised client name`** — the Mac's config has no screen called `windows`.
+The name must match `doc/mac-to-windows.conf`.
 
-**`failed to verify server certificate fingerprint`** — step 6 was missed, or a
-line was pasted incompletely. The entire `v2:sha256:...` line must be copied.
+**Cannot reach the Mac** — check the Mac's firewall allows incoming TCP 24800.
+Nothing needs opening on Windows; the client dials out.
 
-**`unrecognised client name`** — the server's config has no screen matching your
-`--name`. It must be exactly `windows` to match `doc/mac-to-windows.conf`.
+**The server address changed** — re-run `barrier-client.bat <new-ip>`, or give
+the MacBook a DHCP reservation so it stops moving.
 
-**Connects, but no keystrokes arrive** — check for an old `barrierd` service
-left by a previous install, and remove it from an administrator prompt:
+**An old service is still installed** — from an administrator prompt:
 ```bat
 sc stop Barrier
 sc delete Barrier
 ```
 
-**Cannot reach the Mac at all** — check the MacBook's firewall allows incoming
-TCP 24800. Nothing needs opening on the Windows side; the client dials out.
+---
 
-**Autostart is not working** — check the launcher is in place:
+## Building it yourself (optional)
+
+Only needed if you want to change the code. CI does this on every push.
+
+Prerequisites: Git, CMake, Visual Studio 2017+ with "Desktop development with
+C++", and OpenSSL via vcpkg:
+
 ```bat
-dir "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup"
-```
-If `Barrier Client.vbs` is missing, re-run `install-windows-autostart.bat`. If it
-is there but nothing starts, some security software blocks `.vbs` from Startup;
-run the client from a shortcut with "Run: Minimized" instead.
+git clone --recursive -b security-hardening https://github.com/gabrielbarandiaran/barrier
+cd barrier
 
-**The server address changed** — just re-run `install-windows-autostart.bat` with
-the new address. Better: give the MacBook a DHCP reservation on your router so it
-stops changing.
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+C:\vcpkg\bootstrap-vcpkg.bat
+C:\vcpkg\vcpkg install openssl:x64-windows
+```
+
+Then from an **x64 Native Tools Command Prompt for VS**:
+
+```bat
+build-windows-client.bat
+```
+
+The result is `build\bin\Release\barrierc.exe`. `update-windows.bat` pulls,
+rebuilds, reinstalls and restarts in one go.
+
+If CMake cannot find vcpkg, point it there: `set VCPKG_ROOT=D:\path\to\vcpkg`.
