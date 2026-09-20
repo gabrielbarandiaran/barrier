@@ -62,10 +62,13 @@ set (libs)
 #
 if (MSVC)
     # /guard:cf   Control Flow Guard
-    # /sdl        additional security checks, strict
     # /DYNAMICBASE + /HIGHENTROPYVA  full 64-bit ASLR
     # /NXCOMPAT   DEP
-    add_compile_options (/guard:cf /sdl)
+    #
+    # /sdl is deliberately absent. It promotes C4996 to an error, and the
+    # Windows SDK's own multimon.h calls the deprecated GetVersionExA, so the
+    # build fails on a header we do not control.
+    add_compile_options (/guard:cf)
     string (APPEND CMAKE_EXE_LINKER_FLAGS
             " /guard:cf /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA")
     string (APPEND CMAKE_SHARED_LINKER_FLAGS

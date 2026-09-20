@@ -23,6 +23,8 @@ endif()
 
 add_library(net STATIC ${sources})
 
-if (UNIX)
-    target_link_libraries(net mt io ${OPENSSL_LIBS})
-endif()
+# Not guarded by if(UNIX): OPENSSL_LIBS is now an imported target, and linking
+# it here is what carries OpenSSL's include directories into this library. The
+# Windows build used to get those from a global include_directories() call that
+# no longer exists, and failed with "Cannot open include file: openssl/...".
+target_link_libraries(net mt io ${OPENSSL_LIBS})
