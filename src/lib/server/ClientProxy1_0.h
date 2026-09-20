@@ -62,6 +62,15 @@ public:
     virtual void        fileChunkSending(UInt8 mark, char* data, size_t dataSize);
 
 protected:
+    //! Send any mouse motion held back by mouseMove()
+    /*!
+    Must be called before writing any other message to the client.  A
+    deferred motion is older than whatever we're about to send, so
+    sending it later would put, say, a button press at the position the
+    cursor had two moves ago.
+    */
+    void                flushMouseMove();
+
     virtual bool        parseHandshakeMessage(const UInt8* code);
     virtual bool        parseMessage(const UInt8* code);
 
@@ -76,6 +85,7 @@ private:
     void                removeHandlers();
 
     void                handleData(const Event&, void*);
+    void                handleOutputFlushed(const Event&, void*);
     void                handleDisconnect(const Event&, void*);
     void                handleWriteError(const Event&, void*);
     void                handleFlatline(const Event&, void*);
@@ -104,4 +114,9 @@ private:
     EventQueueTimer*    m_heartbeatTimer;
     MessageParser        m_parser;
     IEventQueue*        m_events;
+
+    // motion deferred because the link was backed up.  see mouseMove().
+    bool                m_mouseMovePending;
+    SInt32                m_mouseMoveX;
+    SInt32                m_mouseMoveY;
 };

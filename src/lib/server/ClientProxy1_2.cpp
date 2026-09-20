@@ -40,6 +40,10 @@ ClientProxy1_2::~ClientProxy1_2()
 void
 ClientProxy1_2::mouseRelativeMove(SInt32 xRel, SInt32 yRel)
 {
+    // relative motion accumulates, so it can't be coalesced the way
+    // kMsgDMouseMove is, and it has to follow any absolute position we
+    // deferred or the client applies the delta from the wrong place.
+    flushMouseMove();
     LOG((CLOG_DEBUG2 "send mouse relative move to \"%s\" %d,%d", getName().c_str(), xRel, yRel));
     ProtocolUtil::writef(getStream(), kMsgDMouseRelMove, xRel, yRel);
 }

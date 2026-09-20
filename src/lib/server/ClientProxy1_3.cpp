@@ -49,6 +49,7 @@ ClientProxy1_3::~ClientProxy1_3()
 void
 ClientProxy1_3::mouseWheel(SInt32 xDelta, SInt32 yDelta)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG2 "send mouse wheel to \"%s\" %+d,%+d", getName().c_str(), xDelta, yDelta));
     ProtocolUtil::writef(getStream(), kMsgDMouseWheel, xDelta, yDelta);
 }
@@ -126,5 +127,6 @@ ClientProxy1_3::handleKeepAlive(const Event&, void*)
 void
 ClientProxy1_3::keepAlive()
 {
+    flushMouseMove();
     ProtocolUtil::writef(getStream(), kMsgCKeepAlive);
 }

@@ -31,18 +31,31 @@
 // ClientProxy1_0
 //
 
+// coalesce mouse motion once at least this many bytes are still waiting to go
+// out.  a motion message costs 12 bytes on the wire and a healthy link drains
+// it long before the next one arrives, so the common case still writes
+// immediately; this only trips when the link has actually stalled.
+static const UInt32 kMouseMoveBacklog = 64;
+
 ClientProxy1_0::ClientProxy1_0(const std::string& name, barrier::IStream* stream,
                                IEventQueue* events) :
     ClientProxy(name, stream),
     m_heartbeatTimer(NULL),
     m_parser(&ClientProxy1_0::parseHandshakeMessage),
-    m_events(events)
+    m_events(events),
+    m_mouseMovePending(false),
+    m_mouseMoveX(0),
+    m_mouseMoveY(0)
 {
     // install event handlers
     m_events->adoptHandler(m_events->forIStream().inputReady(),
                             stream->getEventTarget(),
                             new TMethodEventJob<ClientProxy1_0>(this,
                                 &ClientProxy1_0::handleData, NULL));
+    m_events->adoptHandler(m_events->forIStream().outputFlushed(),
+                            stream->getEventTarget(),
+                            new TMethodEventJob<ClientProxy1_0>(this,
+                                &ClientProxy1_0::handleOutputFlushed, NULL));
     m_events->adoptHandler(m_events->forIStream().outputError(),
                             stream->getEventTarget(),
                             new TMethodEventJob<ClientProxy1_0>(this,
@@ -87,6 +100,8 @@ ClientProxy1_0::removeHandlers()
 {
     // uninstall event handlers
     m_events->removeHandler(m_events->forIStream().inputReady(),
+                            getStream()->getEventTarget());
+    m_events->removeHandler(m_events->forIStream().outputFlushed(),
                             getStream()->getEventTarget());
     m_events->removeHandler(m_events->forIStream().outputError(),
                             getStream()->getEventTarget());
@@ -226,6 +241,15 @@ ClientProxy1_0::parseMessage(const UInt8* code)
 }
 
 void
+ClientProxy1_0::handleOutputFlushed(const Event&, void*)
+{
+    // the link has caught up, so the position we held back is now the one
+    // the client is missing.  this is what guarantees the final position is
+    // delivered when the user stops moving the mouse.
+    flushMouseMove();
+}
+
+void
 ClientProxy1_0::handleDisconnect(const Event&, void*)
 {
     LOG((CLOG_NOTE "client \"%s\" has disconnected", getName().c_str()));
@@ -275,6 +299,7 @@ void
 ClientProxy1_0::enter(SInt32 xAbs, SInt32 yAbs,
                 UInt32 seqNum, KeyModifierMask mask, bool)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send enter to \"%s\", %d,%d %d %04x", getName().c_str(), xAbs, yAbs, seqNum, mask));
     ProtocolUtil::writef(getStream(), kMsgCEnter,
                                 xAbs, yAbs, seqNum, mask);
@@ -283,6 +308,7 @@ ClientProxy1_0::enter(SInt32 xAbs, SInt32 yAbs,
 bool
 ClientProxy1_0::leave()
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send leave to \"%s\"", getName().c_str()));
     ProtocolUtil::writef(getStream(), kMsgCLeave);
 
@@ -299,6 +325,7 @@ ClientProxy1_0::setClipboard(ClipboardID id, const IClipboard* clipboard)
 void
 ClientProxy1_0::grabClipboard(ClipboardID id)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG "send grab clipboard %d to \"%s\"", id, getName().c_str()));
     ProtocolUtil::writef(getStream(), kMsgCClipboard, id, 0);
 
@@ -315,6 +342,7 @@ ClientProxy1_0::setClipboardDirty(ClipboardID id, bool dirty)
 void
 ClientProxy1_0::keyDown(KeyID key, KeyModifierMask mask, KeyButton)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send key down to \"%s\" id=%d, mask=0x%04x", getName().c_str(), key, mask));
     ProtocolUtil::writef(getStream(), kMsgDKeyDown1_0, key, mask);
 }
@@ -323,6 +351,7 @@ void
 ClientProxy1_0::keyRepeat(KeyID key, KeyModifierMask mask,
                 SInt32 count, KeyButton)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send key repeat to \"%s\" id=%d, mask=0x%04x, count=%d", getName().c_str(), key, mask, count));
     ProtocolUtil::writef(getStream(), kMsgDKeyRepeat1_0, key, mask, count);
 }
@@ -330,6 +359,7 @@ ClientProxy1_0::keyRepeat(KeyID key, KeyModifierMask mask,
 void
 ClientProxy1_0::keyUp(KeyID key, KeyModifierMask mask, KeyButton)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send key up to \"%s\" id=%d, mask=0x%04x", getName().c_str(), key, mask));
     ProtocolUtil::writef(getStream(), kMsgDKeyUp1_0, key, mask);
 }
@@ -337,6 +367,7 @@ ClientProxy1_0::keyUp(KeyID key, KeyModifierMask mask, KeyButton)
 void
 ClientProxy1_0::mouseDown(ButtonID button)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send mouse down to \"%s\" id=%d", getName().c_str(), button));
     ProtocolUtil::writef(getStream(), kMsgDMouseDown, button);
 }
@@ -344,6 +375,7 @@ ClientProxy1_0::mouseDown(ButtonID button)
 void
 ClientProxy1_0::mouseUp(ButtonID button)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send mouse up to \"%s\" id=%d", getName().c_str(), button));
     ProtocolUtil::writef(getStream(), kMsgDMouseUp, button);
 }
@@ -351,8 +383,32 @@ ClientProxy1_0::mouseUp(ButtonID button)
 void
 ClientProxy1_0::mouseMove(SInt32 xAbs, SInt32 yAbs)
 {
+    // kMsgDMouseMove carries an absolute position, so an unsent one is
+    // entirely superseded by this one.  queueing them all up means a stalled
+    // link later replays the cursor through where it used to be, so hold the
+    // newest position instead and let flushMouseMove() send it.
+    if (getStream()->getOutputSize() >= kMouseMoveBacklog) {
+        m_mouseMoveX       = xAbs;
+        m_mouseMoveY       = yAbs;
+        m_mouseMovePending = true;
+        return;
+    }
+
+    m_mouseMovePending = false;
     LOG((CLOG_DEBUG2 "send mouse move to \"%s\" %d,%d", getName().c_str(), xAbs, yAbs));
     ProtocolUtil::writef(getStream(), kMsgDMouseMove, xAbs, yAbs);
+}
+
+void
+ClientProxy1_0::flushMouseMove()
+{
+    if (!m_mouseMovePending) {
+        return;
+    }
+
+    m_mouseMovePending = false;
+    LOG((CLOG_DEBUG2 "send deferred mouse move to \"%s\" %d,%d", getName().c_str(), m_mouseMoveX, m_mouseMoveY));
+    ProtocolUtil::writef(getStream(), kMsgDMouseMove, m_mouseMoveX, m_mouseMoveY);
 }
 
 void
@@ -364,6 +420,8 @@ ClientProxy1_0::mouseRelativeMove(SInt32, SInt32)
 void
 ClientProxy1_0::mouseWheel(SInt32, SInt32 yDelta)
 {
+    flushMouseMove();
+
     // clients prior to 1.3 only support the y axis
     LOG((CLOG_DEBUG2 "send mouse wheel to \"%s\" %+d", getName().c_str(), yDelta));
     ProtocolUtil::writef(getStream(), kMsgDMouseWheel1_0, yDelta);
@@ -386,6 +444,7 @@ ClientProxy1_0::fileChunkSending(UInt8 mark, char* data, size_t dataSize)
 void
 ClientProxy1_0::screensaver(bool on)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send screen saver to \"%s\" on=%d", getName().c_str(), on ? 1 : 0));
     ProtocolUtil::writef(getStream(), kMsgCScreenSaver, on ? 1 : 0);
 }
@@ -393,6 +452,7 @@ ClientProxy1_0::screensaver(bool on)
 void
 ClientProxy1_0::resetOptions()
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send reset options to \"%s\"", getName().c_str()));
     ProtocolUtil::writef(getStream(), kMsgCResetOptions);
 
@@ -405,6 +465,7 @@ ClientProxy1_0::resetOptions()
 void
 ClientProxy1_0::setOptions(const OptionsList& options)
 {
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send set options to \"%s\" size=%d", getName().c_str(), options.size()));
     ProtocolUtil::writef(getStream(), kMsgDSetOptions, &options);
 
@@ -451,6 +512,7 @@ ClientProxy1_0::recvInfo()
     m_info.m_my = my;
 
     // acknowledge receipt
+    flushMouseMove();
     LOG((CLOG_DEBUG1 "send info ack to \"%s\"", getName().c_str()));
     ProtocolUtil::writef(getStream(), kMsgCInfoAck);
     return true;

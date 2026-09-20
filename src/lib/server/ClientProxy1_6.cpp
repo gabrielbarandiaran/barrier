@@ -65,6 +65,7 @@ ClientProxy1_6::setClipboard(ClipboardID id, const IClipboard* clipboard)
 void
 ClientProxy1_6::handleClipboardSendingEvent(const Event& event, void*)
 {
+    flushMouseMove();
     ClipboardChunk::send(getStream(), event.getData());
 }
 

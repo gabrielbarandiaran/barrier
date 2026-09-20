@@ -114,6 +114,15 @@ public:
     */
     virtual UInt32        getSize() const = 0;
 
+    //! Get bytes waiting to be written
+    /*!
+    Returns the number of bytes that have been written to the stream
+    but not yet handed to the operating system.  A non-zero value
+    means the far end isn't keeping up.  Some streams may not be able
+    to determine this and will always return zero.
+    */
+    virtual UInt32        getOutputSize() const = 0;
+
     //@}
 };
 
