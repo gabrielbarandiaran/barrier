@@ -1,0 +1,101 @@
+name: Windows client
+
+# Builds a ready-to-run Barrier client for Windows so nobody has to install
+# Visual Studio, CMake or vcpkg to get one. The result is attached to the run
+# as a zip: download it, unzip it, run barrier-client.bat.
+
+on:
+  push:
+    branches: [master, security-hardening]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install OpenSSL
+        run: choco install openssl --no-progress -y
+
+      - name: Locate OpenSSL
+        id: ssl
+        shell: pwsh
+        run: |
+          $root = Get-ChildItem 'C:\Program Files' -Filter 'OpenSSL*' -Directory |
+                  Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $root) { throw 'OpenSSL not found after install' }
+          "root=$($root.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Using OpenSSL at $($root.FullName)"
+
+      - name: Configure
+        env:
+          SSL_ROOT: ${{ steps.ssl.outputs.root }}
+        run: >
+          cmake -S . -B build -A x64
+          -DOPENSSL_ROOT_DIR="$env:SSL_ROOT"
+          -DBARRIER_BUILD_GUI=OFF
+          -DBARRIER_BUILD_INSTALLER=OFF
+          -DBARRIER_BUILD_TESTS=OFF
+          -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Check the launcher script parses
+        shell: pwsh
+        run: |
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path 'barrier-client.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Host "::error::$($_.Message)" }
+            throw 'barrier-client.ps1 has syntax errors'
+          }
+          Write-Host 'barrier-client.ps1 parses clean'
+
+      - name: Package
+        shell: pwsh
+        env:
+          SSL_ROOT: ${{ steps.ssl.outputs.root }}
+        run: |
+          $out = 'dist-out/barrier-client'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          Copy-Item build/bin/Release/barrierc.exe $out
+
+          # Ship the OpenSSL DLLs next to the exe so it runs on a clean machine.
+          $sslBin = Join-Path $env:SSL_ROOT 'bin'
+          Get-ChildItem $sslBin -Filter '*.dll' |
+            Where-Object { $_.Name -match 'libssl|libcrypto' } |
+            ForEach-Object { Copy-Item $_.FullName $out }
+
+          Copy-Item barrier-client.bat            $out
+          Copy-Item barrier-client.ps1            $out
+          Copy-Item install-windows-autostart.bat $out
+          Copy-Item remove-windows-autostart.bat  $out
+          Copy-Item doc/WINDOWS-CLIENT.md         $out
+
+          Write-Host 'Packaged:'
+          Get-ChildItem $out | ForEach-Object { Write-Host "  $($_.Name)" }
+
+          if (-not (Test-Path "$out/barrierc.exe")) { throw 'barrierc.exe missing' }
+
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          # --version exits 3 by design (kExitArgs), so check the output, not
+          # the exit code. This proves the exe runs and found its DLLs.
+          $v = & dist-out/barrier-client/barrierc.exe --version 2>&1 | Out-String
+          Write-Host $v
+          if ($v -notmatch 'barrierc') { throw 'barrierc.exe did not run' }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: barrier-client-windows
+          path: dist-out/barrier-client
+          if-no-files-found: error
