@@ -347,7 +347,11 @@ elseif (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
 
     list (APPEND libs Wtsapi32 Userenv Wininet comsuppw Shlwapi)
 
+    # NOMINMAX: windows.h defines min() and max() as macros, which breaks any
+    # std::min(a, b) call without explicit template arguments in a translation
+    # unit that reaches a Windows header.
     add_definitions (
+        /DNOMINMAX
         /DSYSAPI_WIN32=1
         /DWINAPI_MSWINDOWS=1
         /D_SILENCE_TR1_NAMESPACE_DEPRECATION_WARNING=1  # tr1 is used from gtest and gmock
