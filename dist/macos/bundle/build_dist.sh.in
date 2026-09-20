@@ -76,8 +76,31 @@ fi
 # to hold the permission on this machine, but the identity changes whenever the
 # binaries are rebuilt, so the grant may need to be re-applied after a rebuild.
 sign_bundle() {
-    info "Signing bundle (ad-hoc)"
-    codesign --force --deep --sign - \
+    # Prefer a real signing identity over an ad-hoc signature.
+    #
+    # An ad-hoc signature has no stable identity: its hash changes on every
+    # rebuild, so macOS treats each build as a different application and drops
+    # the Accessibility grant. The app then exits at startup (main.cpp checks
+    # AXIsProcessTrusted and returns 1), which looks like "it asks for
+    # permission it already has and never opens".
+    #
+    # Signing with a certificate from the keychain keeps the identity stable
+    # across rebuilds, so the grant sticks. Override with
+    # BARRIER_CODESIGN_IDENTITY, or set it to "-" to force ad-hoc.
+    if [ -z "${BARRIER_CODESIGN_IDENTITY:-}" ]; then
+        BARRIER_CODESIGN_IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+            | awk -F'"' '/"/ {print $2; exit}')
+    fi
+
+    if [ -n "$BARRIER_CODESIGN_IDENTITY" ] && [ "$BARRIER_CODESIGN_IDENTITY" != "-" ]; then
+        info "Signing bundle as: $BARRIER_CODESIGN_IDENTITY"
+    else
+        BARRIER_CODESIGN_IDENTITY="-"
+        warn "No signing identity found; using an ad-hoc signature."
+        warn "The Accessibility grant will be dropped on every rebuild."
+    fi
+
+    codesign --force --deep --sign "$BARRIER_CODESIGN_IDENTITY" \
              --identifier "org.barrier-foss.barrier" \
              --timestamp=none \
              Barrier.app || { error "codesign failed"; exit 1; }
