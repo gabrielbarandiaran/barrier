@@ -154,6 +154,32 @@ the PC sits to the right — swap `right`/`left` in the `links` section if not.
 
 ---
 
+## Updating later
+
+```sh
+./update-macos.sh
+```
+
+That pulls, rebuilds, replaces `/Applications/Barrier.app` and restarts it.
+`--no-pull` rebuilds what is already checked out. It refuses to pull over
+uncommitted local changes rather than trampling them.
+
+Your certificate and trusted fingerprints live in
+`~/Library/Application Support/barrier/SSL`, not in the build, so updating never
+means redoing the fingerprint exchange.
+
+**One thing to expect after an update.** The app is ad-hoc signed — the best a
+locally built app can do without an Apple Developer certificate — so its identity
+changes on every rebuild, and macOS sometimes drops the Accessibility grant when
+that happens. If the server starts refusing with "assistive devices does not
+trust this process", go to Privacy & Security -> Accessibility, remove Barrier
+with "−" and add it back. The updater prints this reminder too.
+
+On the Windows side the equivalent is `update-windows.bat`; see
+[WINDOWS-CLIENT.md](WINDOWS-CLIENT.md).
+
+---
+
 ## The keyboard specifically
 
 **Command behaves like Control on the PC.** The config maps macOS's Command key

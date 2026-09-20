@@ -185,6 +185,29 @@ Check whether it is running:
 tasklist | findstr barrierc
 ```
 
+## 9. Updating later
+
+```bat
+update-windows.bat
+```
+
+From an "x64 Native Tools Command Prompt for VS", in the repo root. That is the
+whole update: it pulls, stops the running client, rebuilds, reinstalls into
+`%LOCALAPPDATA%\Barrier\bin` and restarts it.
+
+Stopping first is not optional — Windows will not overwrite a running `.exe`,
+and the autostart launcher relaunches the client a few seconds after it exits,
+so the script stops the launcher before the client.
+
+Use `update-windows.bat --no-pull` to rebuild what is already checked out.
+
+If you have local changes the script refuses to pull rather than trampling them.
+Commit or stash first.
+
+**Your certificate and trusted fingerprints are not touched.** They live in
+`%LOCALAPPDATA%\Barrier\SSL`, not in the build, so updating never means
+redoing the fingerprint exchange.
+
 ## Troubleshooting
 
 **`cl.exe not found`** — you are in a plain `cmd` window. Use "x64 Native Tools

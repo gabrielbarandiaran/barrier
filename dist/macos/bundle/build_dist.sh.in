@@ -32,8 +32,17 @@ if [ -d "$B_MACOS" ]; then
 fi
 
 info "Copying binaries into bundle"
-# Copy the folder instead of globbing unquoted path
-cp -r "$B_BINDIR" "$B_MACOS" || exit 1
+# Copy the three shipped binaries by name. This used to copy the whole output
+# directory, which meant a tree that had ever been configured with tests
+# enabled shipped guiunittests/integtests/unittests inside the .app.
+mkdir -p "$B_MACOS" || exit 1
+for b in barrier barriers barrierc; do
+    if [ ! -x "$B_BINDIR/$b" ]; then
+        error "Missing $B_BINDIR/$b -- did the build complete?"
+        exit 1
+    fi
+    cp "$B_BINDIR/$b" "$B_MACOS/" || exit 1
+done
 
 # Check for macdeployqt on MacPorts
 if which -s port ; then
