@@ -677,7 +677,8 @@ KeyState::fakeKeyUp(KeyButton serverID)
     // note keys down
     --m_keys[localID];
     --m_syntheticKeys[localID];
-    m_serverKeys[serverID] = 0;
+    // must stay masked, same as the read above -- serverID comes straight off the wire
+    m_serverKeys[serverID & kButtonMask] = 0;
 
     // check if this is a modifier
     ModifierToKeys::iterator i = m_activeModifiers.begin();

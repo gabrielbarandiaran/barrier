@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-cmake_minimum_required (VERSION 3.4)
+cmake_minimum_required (VERSION 3.10)
 project (barrier C CXX)
 
 option (BARRIER_BUILD_GUI "Build the GUI" ON)
@@ -51,6 +51,50 @@ else()
 endif()
 
 set (libs)
+
+#
+# Exploit mitigations.
+#
+# None of these were enabled before; the build relied entirely on compiler
+# defaults. They cost nothing measurable for a program that spends its life
+# blocked on a socket, and they raise the bar on the memory-safety bugs that
+# a network-facing parser inevitably still has.
+#
+if (MSVC)
+    # /guard:cf   Control Flow Guard
+    # /sdl        additional security checks, strict
+    # /DYNAMICBASE + /HIGHENTROPYVA  full 64-bit ASLR
+    # /NXCOMPAT   DEP
+    add_compile_options (/guard:cf /sdl)
+    string (APPEND CMAKE_EXE_LINKER_FLAGS
+            " /guard:cf /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA")
+    string (APPEND CMAKE_SHARED_LINKER_FLAGS
+            " /guard:cf /DYNAMICBASE /NXCOMPAT /HIGHENTROPYVA")
+else()
+    add_compile_options (-fstack-protector-strong -Wformat -Wformat-security)
+
+    # _FORTIFY_SOURCE needs optimisation to do anything and warns noisily at -O0.
+    add_compile_definitions ($<$<NOT:$<CONFIG:Debug>>:_FORTIFY_SOURCE=2>)
+
+    set (CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+    # CMP0083 must be NEW for check_pie_supported() to be usable at all.
+    if (POLICY CMP0083)
+        cmake_policy (SET CMP0083 NEW)
+        include (CheckPIESupported OPTIONAL RESULT_VARIABLE _has_check_pie)
+        if (_has_check_pie)
+            check_pie_supported (OUTPUT_VARIABLE _pie_error LANGUAGES CXX)
+            if (CMAKE_CXX_LINK_PIE_SUPPORTED)
+                set (CMAKE_POSITION_INDEPENDENT_EXECUTABLE TRUE)
+            endif()
+        endif()
+    endif()
+
+    # Full RELRO. Not a thing on Mach-O, so ELF platforms only.
+    if (NOT APPLE)
+        string (APPEND CMAKE_EXE_LINKER_FLAGS " -Wl,-z,relro,-z,now")
+        string (APPEND CMAKE_SHARED_LINKER_FLAGS " -Wl,-z,relro,-z,now")
+    endif()
+endif()
 
 if (UNIX)
     if (NOT APPLE)
@@ -139,7 +183,17 @@ if (UNIX)
     endif()
 
     if (APPLE)
-        set (CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS} -DGTEST_USE_OWN_TR1_TUPLE=1")
+        # Only pass --sysroot when one is actually configured. An empty
+        # CMAKE_OSX_SYSROOT (the default on current macOS, where clang locates
+        # the SDK itself) made --sysroot consume the following flag and broke
+        # linking with "library 'c++' not found".
+        if (CMAKE_OSX_SYSROOT)
+            set (CMAKE_CXX_FLAGS "--sysroot ${CMAKE_OSX_SYSROOT} ${CMAKE_CXX_FLAGS}")
+        endif()
+
+        # ext/gtest is from 2011 and needs its own tr1::tuple; libc++ dropped
+        # the <tr1/tuple> header. Only affects -DBARRIER_BUILD_TESTS=ON.
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DGTEST_USE_OWN_TR1_TUPLE=1")
 
         find_library (lib_ScreenSaver ScreenSaver)
         find_library (lib_IOKit IOKit)
@@ -307,77 +361,29 @@ include_directories("${CMAKE_SOURCE_DIR}/ext/gulrak-filesystem/include")
 #
 # OpenSSL
 #
-if (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-    set (OPENSSL_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/ext/openssl/windows)
-    if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set (OPENSSL_ROOT "${OPENSSL_ROOT}/x64")
-    else()
-        set (OPENSSL_ROOT "${OPENSSL_ROOT}/x86")
-    endif()
+# This used to be four hand-rolled per-platform branches, and on Windows it
+# linked prebuilt OpenSSL 1.0.2l binaries committed into ext/openssl -- a 2017
+# release that went end-of-life in 2019. Those binaries are gone; every
+# platform now discovers OpenSSL the standard way.
+#
+# 1.1.1 is the floor because the code requires the versioned-API entry points
+# (SSL_CTX_set_min_proto_version and friends) used to pin the TLS version.
+# 3.x is what you actually want.
+#
+# Point the build at a specific OpenSSL with either:
+#   -DOPENSSL_ROOT_DIR=<prefix>        or
+#   -DCMAKE_PREFIX_PATH=<prefix>
+# On Windows, a vcpkg toolchain file satisfies this with no extra flags:
+#   -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake
+# On macOS, Homebrew's openssl@3 is not symlinked into /usr/local, so pass
+#   -DCMAKE_PREFIX_PATH=$(brew --prefix openssl@3)
+#
+find_package (OpenSSL 1.1.1 REQUIRED)
 
-    include_directories (BEFORE SYSTEM ${OPENSSL_ROOT}/include)
-    set (OPENSSL_LIBS
-        ${OPENSSL_ROOT}/lib/libeay32.lib
-        ${OPENSSL_ROOT}/lib/ssleay32.lib
-    )
-elseif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    find_program(APT_PROGRAM "apt")
-    find_program(BREW_PROGRAM "brew")
-    find_program(PORT_PROGRAM "port")
+message (STATUS "Using OpenSSL ${OPENSSL_VERSION}")
 
-    if (IS_DIRECTORY /opt/procursus AND APT_PROGRAM)
-        # procursus/apt
-        set (OPENSSL_ROOT /opt/procursus)
-
-        include_directories (BEFORE SYSTEM ${OPENSSL_ROOT}/include)
-
-        set (OPENSSL_LIBS
-            ${OPENSSL_ROOT}/lib/libssl.a
-            ${OPENSSL_ROOT}/lib/libcrypto.a
-        )
-    elseif (IS_DIRECTORY /opt/local AND PORT_PROGRAM)
-        # macports
-        set (OPENSSL_ROOT /opt/local)
-
-        set (OPENSSL_LIBS
-            ${OPENSSL_ROOT}/lib/libssl.a
-            ${OPENSSL_ROOT}/lib/libcrypto.a
-            z
-        )
-    elseif (IS_DIRECTORY /usr/local/opt/openssl AND BREW_PROGRAM)
-        # brew
-        set (OPENSSL_ROOT /usr/local/opt/openssl)
-
-        include_directories (BEFORE SYSTEM ${OPENSSL_ROOT}/include)
-
-        set (OPENSSL_LIBS
-            ${OPENSSL_ROOT}/lib/libssl.a
-            ${OPENSSL_ROOT}/lib/libcrypto.a
-        )
-    elseif (IS_DIRECTORY /opt/homebrew/opt/openssl AND BREW_PROGRAM)
-        # brew
-        set (OPENSSL_ROOT /opt/homebrew/opt/openssl)
-
-        include_directories (BEFORE SYSTEM ${OPENSSL_ROOT}/include)
-
-        set (OPENSSL_LIBS
-            ${OPENSSL_ROOT}/lib/libssl.a
-            ${OPENSSL_ROOT}/lib/libcrypto.a
-        )
-    endif()
-
-elseif (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-    set (OPENSSL_LIBS ssl crypto)
-else()
-    find_library (lib_ssl ssl)
-    find_library (lib_crypto crypto)
-    if (NOT lib_ssl)
-        message(FATAL_ERROR "openssl library not found")
-    elseif (NOT lib_crypto)
-        message(FATAL_ERROR "crypto library not found")
-    endif()
-    set (OPENSSL_LIBS ${lib_ssl} ${lib_crypto})
-endif()
+# Imported targets carry their own include directories and link deps.
+set (OPENSSL_LIBS OpenSSL::SSL OpenSSL::Crypto)
 
 #
 # Configure_file... but for directories, recursively.
@@ -432,9 +438,9 @@ endif()
 # Windows installer
 #
 if (${CMAKE_SYSTEM_NAME} MATCHES "Windows")
-        set (BARRIER_WIX_VERSION "${BARRIER_VERSION_MAJOR}.${BARRIER_VERSION_MINOR}.${BARRIER_VERSION_PATCH}")
-        message (STATUS "Configuring the wix installer")
-        configure_files (${CMAKE_CURRENT_SOURCE_DIR}/dist/wix ${CMAKE_BINARY_DIR}/installer-wix)
+        # The WiX installer was never actually built (build_installer.bat only
+        # runs Inno's ISCC) and had long since rotted -- it referenced a
+        # res/openssl directory that does not exist in the tree. Removed.
         message (STATUS "Configuring the inno installer")
         configure_files (${CMAKE_CURRENT_SOURCE_DIR}/dist/inno ${CMAKE_BINARY_DIR}/installer-inno)
 endif()

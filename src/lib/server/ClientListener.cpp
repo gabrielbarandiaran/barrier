@@ -183,6 +183,7 @@ ClientListener::handleUnknownClient(const Event&, void* vclient)
 
     // get the real client proxy and install it
     ClientProxy* client = unknownClient->orphanClientProxy();
+    IDataSocket* failedSocket = NULL;
     if (client != NULL) {
         // handshake was successful
         m_waitingClients.push_back(client);
@@ -195,18 +196,28 @@ ClientListener::handleUnknownClient(const Event&, void* vclient)
                                 &ClientListener::handleClientDisconnected,
                                 client));
     } else {
-        auto* stream = unknownClient->getStream();
+        // handshake failed -- the socket was never handed off to a waiting
+        // client, so it's ours to clean up or it leaks for good.  don't
+        // delete it until unknownClient (and its filter) are gone below,
+        // since the filter's d'tor still touches it.
+        auto* stream = static_cast<PacketStreamFilter*>(unknownClient->getStream());
         if (stream) {
+            failedSocket = static_cast<IDataSocket*>(stream->getStream());
             stream->close();
         }
     }
 
     // now finished with unknown client
-    m_events->removeHandler(m_events->forClientProxyUnknown().success(), client);
-    m_events->removeHandler(m_events->forClientProxyUnknown().failure(), client);
+    m_events->removeHandler(m_events->forClientProxyUnknown().success(), unknownClient);
+    m_events->removeHandler(m_events->forClientProxyUnknown().failure(), unknownClient);
     m_newClients.erase(unknownClient);
 
     delete unknownClient;
+
+    if (failedSocket != NULL) {
+        m_clientSockets.erase(failedSocket);
+        delete failedSocket;
+    }
 }
 
 void

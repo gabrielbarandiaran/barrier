@@ -139,11 +139,7 @@ ArgParser::parseClientArgs(ClientArgs& args, int argc, const char* const* argv)
 bool
 ArgParser::parseMSWindowsArg(ArgsBase& argsBase, const int& argc, const char* const* argv, int& i)
 {
-    if (isArg(i, argc, argv, NULL, "--service")) {
-        LOG((CLOG_WARN "obsolete argument --service, use barrierd instead."));
-        argsBase.m_shouldExit = true;
-    }
-    else if (isArg(i, argc, argv, NULL, "--exit-pause")) {
+    if (isArg(i, argc, argv, NULL, "--exit-pause")) {
         argsBase.m_pauseOnExit = true;
     }
     else if (isArg(i, argc, argv, NULL, "--stop-on-desk-switch")) {

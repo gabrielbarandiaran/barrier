@@ -44,8 +44,11 @@
 */
 
 #include "SecureUtils.h"
+#include "FingerprintDatabase.h"
 #include "base/String.h"
+#include "base/Log.h"
 #include "base/finally.h"
+#include "common/DataDirectories.h"
 #include "io/filesystem.h"
 
 #include <openssl/evp.h>
@@ -56,6 +59,14 @@
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
+#include <mutex>
+#include <system_error>
+
+#if !SYSAPI_WIN32
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #if SYSAPI_WIN32
 // Windows builds require a shim that makes it possible to link to different
@@ -74,6 +85,47 @@ const EVP_MD* get_digest_for_type(FingerprintType type)
         case FingerprintType::SHA256: return EVP_sha256();
     }
     throw std::runtime_error("Unknown fingerprint type " + std::to_string(static_cast<int>(type)));
+}
+
+// Opens a file that only the owner can read, creating it that way before anything is written
+// into it. A plain fopen() creates a world-readable file, which would hand the unencrypted
+// private key to every local user for as long as it takes to write the next line.
+std::FILE* fopen_owner_only_path(const fs::path& path)
+{
+#if SYSAPI_WIN32
+    // TODO: the Windows equivalent is an explicit DACL granting access to the current user
+    // only, applied with SetNamedSecurityInfo(path, SE_FILE_OBJECT,
+    // DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, ...) on the created
+    // file. Until that is written the key file inherits the directory ACL and may be readable
+    // by other local users.
+    return fopen_utf8_path(path, "w");
+#else
+    int fd = ::open(path.native().c_str(), O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR);
+    if (fd == -1) {
+        return nullptr;
+    }
+
+    // O_CREAT ignores the mode when the file already exists, so a certificate left behind by
+    // an older version must be narrowed explicitly.
+    if (::fchmod(fd, S_IRUSR | S_IWUSR) == -1) {
+        ::close(fd);
+        return nullptr;
+    }
+
+    auto* fp = ::fdopen(fd, "w");
+    if (!fp) {
+        ::close(fd);
+    }
+    return fp;
+#endif
+}
+
+// Best effort: the key file itself is already owner-only, this only stops other users from
+// listing and traversing the directory that holds it.
+void restrict_directory_to_owner(const fs::path& path)
+{
+    std::error_code ec;
+    fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace, ec);
 }
 
 } // namespace
@@ -158,19 +210,18 @@ FingerprintData get_pem_file_cert_fingerprint(const std::string& path, Fingerpri
 
 void generate_pem_self_signed_cert(const std::string& path)
 {
-    auto expiration_days = 365;
+    // Trust in this protocol is pinned to the certificate fingerprint, not to
+    // X.509 validity, so expiry buys almost nothing here -- but it does force
+    // the fingerprint to change, which silently breaks the link until the user
+    // re-approves the peer. A long lifetime keeps the expiry check meaningful
+    // for genuinely stale keys without breaking a working setup every year.
+    auto expiration_days = 3650;
 
-    auto* private_key = EVP_PKEY_new();
+    auto* private_key = EVP_RSA_gen(2048);
     if (!private_key) {
-        throw std::runtime_error("Could not allocate private key for certificate");
-    }
-    auto private_key_free = finally([private_key](){ EVP_PKEY_free(private_key); });
-
-    auto* rsa = RSA_generate_key(2048, RSA_F4, nullptr, nullptr);
-    if (!rsa) {
         throw std::runtime_error("Failed to generate RSA key");
     }
-    EVP_PKEY_assign_RSA(private_key, rsa);
+    auto private_key_free = finally([private_key](){ EVP_PKEY_free(private_key); });
 
     auto* cert = X509_new();
     if (!cert) {
@@ -190,7 +241,12 @@ void generate_pem_self_signed_cert(const std::string& path)
 
     X509_sign(cert, private_key, EVP_sha256());
 
-    auto fp = fopen_utf8_path(path.c_str(), "w");
+    auto cert_path = fs::u8path(path);
+
+    // the unencrypted private key shares this file with the certificate
+    restrict_directory_to_owner(cert_path.parent_path());
+
+    auto fp = fopen_owner_only_path(cert_path);
     if (!fp) {
         throw std::runtime_error("Could not open certificate output path");
     }
@@ -307,6 +363,91 @@ std::string create_fingerprint_randomart(const std::vector<std::uint8_t>& dgst_r
     add_char('+');
 
     return std::string{retval.data(), retval.size()};
+}
+
+static void ensure_local_certificate_once();
+
+bool is_certificate_valid(const std::string& path)
+{
+    auto fp = fopen_utf8_path(path, "r");
+    if (!fp) {
+        return false;
+    }
+    auto file_close = finally([fp]() { std::fclose(fp); });
+
+    auto* cert = PEM_read_X509(fp, nullptr, nullptr, nullptr);
+    if (!cert) {
+        LOG((CLOG_WARN "could not read certificate from %s", path.c_str()));
+        return false;
+    }
+    auto cert_free = finally([cert]() { X509_free(cert); });
+
+    auto* pubkey = X509_get_pubkey(cert);
+    if (!pubkey) {
+        LOG((CLOG_WARN "certificate %s has no public key", path.c_str()));
+        return false;
+    }
+    auto pubkey_free = finally([pubkey]() { EVP_PKEY_free(pubkey); });
+
+    auto key_type = EVP_PKEY_base_id(pubkey);
+    if (key_type != EVP_PKEY_RSA && key_type != EVP_PKEY_DSA) {
+        LOG((CLOG_WARN "certificate %s uses an unsupported key type", path.c_str()));
+        return false;
+    }
+
+    if (EVP_PKEY_bits(pubkey) < 2048) {
+        LOG((CLOG_WARN "certificate %s key is shorter than 2048 bits", path.c_str()));
+        return false;
+    }
+
+    // The old GUI never looked at this, so a certificate was reused forever and
+    // its stated 365-day lifetime meant nothing.
+    if (X509_cmp_current_time(X509_get0_notAfter(cert)) <= 0) {
+        LOG((CLOG_NOTE "certificate %s has expired", path.c_str()));
+        return false;
+    }
+
+    return true;
+}
+
+void ensure_local_certificate()
+{
+    // Cheap to call from every connection attempt; the work happens once.
+    static std::once_flag once;
+    std::call_once(once, []() { ensure_local_certificate_once(); });
+}
+
+static void ensure_local_certificate_once()
+{
+    auto cert_path = DataDirectories::ssl_certificate_path();
+
+    if (!fs::exists(cert_path) || !is_certificate_valid(cert_path.u8string())) {
+        auto cert_dir = cert_path.parent_path();
+        if (!fs::exists(cert_dir)) {
+            fs::create_directories(cert_dir);
+        }
+
+        LOG((CLOG_NOTE "generating TLS certificate at %s", cert_path.u8string().c_str()));
+        generate_pem_self_signed_cert(cert_path.u8string());
+    }
+
+    // Publish our own fingerprints so the user can copy them into the peer's
+    // TrustedServers.txt / TrustedClients.txt.
+    auto local_path = DataDirectories::local_ssl_fingerprints_path();
+    auto local_dir = local_path.parent_path();
+    if (!fs::exists(local_dir)) {
+        fs::create_directories(local_dir);
+    }
+
+    FingerprintDatabase db;
+    db.add_trusted(get_pem_file_cert_fingerprint(cert_path.u8string(), FingerprintType::SHA1));
+    db.add_trusted(get_pem_file_cert_fingerprint(cert_path.u8string(), FingerprintType::SHA256));
+    db.write(local_path);
+
+    LOG((CLOG_INFO "local TLS fingerprint: %s",
+         format_ssl_fingerprint(
+             get_pem_file_cert_fingerprint(cert_path.u8string(),
+                                           FingerprintType::SHA256).data).c_str()));
 }
 
 } // namespace barrier

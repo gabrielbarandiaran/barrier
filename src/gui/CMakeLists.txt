@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.4)
+cmake_minimum_required (VERSION 3.10)
 
 find_package (Qt5 REQUIRED COMPONENTS Core Widgets Network)
 set (CMAKE_AUTOMOC ON)
@@ -131,7 +131,9 @@ add_executable (barrier WIN32
 
 include_directories (./src)
 
-target_link_libraries(barrier net base io Qt5::Core Qt5::Widgets Qt5::Network ${OPENSSL_LIBS})
+# arch was missing here upstream: libbase's log outputters call Arch::getInstance(),
+# so the GUI failed to link with undefined symbols.
+target_link_libraries(barrier arch net base io mt Qt5::Core Qt5::Widgets Qt5::Network ${OPENSSL_LIBS})
 target_compile_definitions (barrier PRIVATE -DBARRIER_VERSION_STAGE="${BARRIER_VERSION_STAGE}")
 target_compile_definitions (barrier PRIVATE -DBARRIER_REVISION="${BARRIER_REVISION}")
 

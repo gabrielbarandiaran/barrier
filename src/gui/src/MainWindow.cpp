@@ -463,6 +463,14 @@ void MainWindow::checkFingerprint(const QString& line)
         return;
     }
 
+    // A client normally trusts exactly one server, so an unrecognised
+    // fingerprint when we already trust one means the server's identity
+    // changed -- either it was reinstalled, or someone is impersonating it.
+    // Treat that differently from a first connection, which otherwise looks
+    // identical to the user. A server legitimately has many clients, so the
+    // same reasoning does not apply in that direction.
+    bool identity_changed = is_client && !db.fingerprints().empty();
+
     static bool messageBoxAlreadyShown = false;
 
     if (!messageBoxAlreadyShown) {
@@ -471,9 +479,37 @@ void MainWindow::checkFingerprint(const QString& line)
         }
 
         messageBoxAlreadyShown = true;
+
+        if (identity_changed) {
+            auto answer = QMessageBox::warning(
+                this, tr("Server identity has changed"),
+                tr("The server presented a certificate that does not match the one you "
+                   "previously approved.\n\n"
+                   "This happens if the server was reinstalled or its certificate was "
+                   "regenerated. It also happens if another machine is impersonating your "
+                   "server in order to capture everything you type, including passwords.\n\n"
+                   "New fingerprint (SHA256):\n%1\n\n"
+                   "Only continue if you know why it changed, and check the fingerprint "
+                   "against the one shown on the server itself.")
+                    .arg(QString::fromStdString(
+                             barrier::format_ssl_fingerprint(fingerprint_sha256.data))),
+                QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+
+            if (answer != QMessageBox::Yes) {
+                messageBoxAlreadyShown = false;
+                return;
+            }
+        }
+
         FingerprintAcceptDialog dialog{this, barrier_type(), fingerprint_sha1, fingerprint_sha256};
         if (dialog.exec() == QDialog::Accepted) {
             // restart core process after trusting fingerprint.
+            if (identity_changed) {
+                // Replace rather than append: the superseded key must stop
+                // being accepted, otherwise approving a change leaves both
+                // the old and new identity trusted forever.
+                db.clear();
+            }
             db.add_trusted(fingerprint_sha256);
             db.write(db_path);
             if (is_client) {

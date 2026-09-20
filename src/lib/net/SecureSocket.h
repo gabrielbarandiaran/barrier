@@ -74,6 +74,10 @@ private:
     std::string getError();
     void                disconnect();
 
+    // tears down the TLS session of a peer that failed verification.
+    // may only be called with ssl_mutex_ acquired
+    void abortHandshake();
+
     // may only be called with ssl_mutex_ acquired
     bool verify_cert_fingerprint(const barrier::fs::path& fingerprint_db_path);
 
@@ -87,6 +91,7 @@ private:
     void                handleTCPConnected(const Event& event, void*);
 
     void freeSSLResources();
+    void freeSSLResourcesLocked(); // may only be called with ssl_mutex_ acquired
 
 private:
     // all accesses to m_ssl must be protected by this mutex. The only function that is called

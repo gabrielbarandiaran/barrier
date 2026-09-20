@@ -158,8 +158,10 @@ void AppConfig::loadSettings()
     m_ElevateMode = static_cast<ElevateMode>(elevateMode.toInt());
     m_AutoConfigPrompted = settings().value("autoConfigPrompted", false).toBool();
     m_CryptoEnabled = settings().value("cryptoEnabled", true).toBool();
-    // TODO: set default value of requireClientCertificate to true on Barrier 2.5.0
-    m_RequireClientCertificate = settings().value("requireClientCertificate", false).toBool();
+    // Defaults to true: with it false the server asks the client for no
+    // certificate at all, so any machine on the network that guesses the
+    // screen name is accepted as that client and receives every keystroke.
+    m_RequireClientCertificate = settings().value("requireClientCertificate", true).toBool();
     m_AutoHide = settings().value("autoHide", false).toBool();
     m_AutoStart = settings().value("autoStart", false).toBool();
     m_MinimizeToTray = settings().value("minimizeToTray", false).toBool();

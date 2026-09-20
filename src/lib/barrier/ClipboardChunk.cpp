@@ -25,6 +25,10 @@
 
 size_t ClipboardChunk::s_expectedSize = 0;
 
+// reject a clipboard transfer that claims to be larger than this, whether or
+// not the sender ever follows through on sending that much data
+static const size_t kMaxClipboardSize = 32 * 1024 * 1024;
+
 ClipboardChunk::ClipboardChunk(size_t size) :
     Chunk(size)
 {
@@ -98,11 +102,19 @@ ClipboardChunk::assemble(barrier::IStream* stream,
 
     if (mark == kDataStart) {
         s_expectedSize = barrier::string::stringToSizeType(data);
+        if (s_expectedSize > kMaxClipboardSize) {
+            LOG((CLOG_ERR "clipboard data too large: expected size=%d", s_expectedSize));
+            return kError;
+        }
         LOG((CLOG_DEBUG "start receiving clipboard data"));
         dataCached.clear();
         return kStart;
     }
     else if (mark == kDataChunk) {
+        if (dataCached.size() + data.size() > s_expectedSize) {
+            LOG((CLOG_ERR "corrupted clipboard data, exceeds expected size=%d", s_expectedSize));
+            return kError;
+        }
         dataCached.append(data);
         return kNotFinish;
     }

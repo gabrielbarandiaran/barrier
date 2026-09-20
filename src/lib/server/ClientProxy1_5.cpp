@@ -65,17 +65,18 @@ ClientProxy1_5::fileChunkSending(UInt8 mark, char* data, size_t dataSize)
 bool
 ClientProxy1_5::parseMessage(const UInt8* code)
 {
-    if (memcmp(code, kMsgDFileTransfer, 4) == 0) {
-        fileChunkReceived();
-    }
-    else if (memcmp(code, kMsgDDragInfo, 4) == 0) {
-        dragInfoReceived();
-    }
-    else {
-        return ClientProxy1_4::parseMessage(code);
+    // File transfer and drag-and-drop are not supported. They were the only
+    // consumers of the chunk assembler that accumulated unbounded attacker
+    // data, and of the filename handling that could be walked out of the drop
+    // directory. Refusing the messages here drops the connection instead.
+    if (memcmp(code, kMsgDFileTransfer, 4) == 0 ||
+        memcmp(code, kMsgDDragInfo, 4) == 0) {
+        LOG((CLOG_ERR "unsupported file transfer message from client \"%s\"",
+             getName().c_str()));
+        return false;
     }
 
-    return true;
+    return ClientProxy1_4::parseMessage(code);
 }
 
 void

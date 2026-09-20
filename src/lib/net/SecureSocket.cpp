@@ -46,6 +46,16 @@
 static const std::size_t MAX_INPUT_BUFFER_SIZE = 1024 * 1024;
 static const float s_retryDelay = 0.01f;
 
+// AEAD ciphersuites with ephemeral key exchange only. Static RSA key exchange, CBC modes,
+// SHA1, 3DES and RC4 are all deliberately absent; do not widen this list to make an old peer
+// connect.
+static const char s_tls12CipherList[] =
+    "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:"
+    "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256";
+
+static const char s_tls13CipherSuites[] =
+    "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256";
+
 enum {
     kMsgSize = 128
 };
@@ -102,6 +112,12 @@ SecureSocket::close()
 void SecureSocket::freeSSLResources()
 {
     std::lock_guard<std::mutex> ssl_lock{ssl_mutex_};
+    freeSSLResourcesLocked();
+}
+
+void SecureSocket::freeSSLResourcesLocked()
+{
+    // ssl_mutex_ is assumed to be acquired
 
     if (m_ssl->m_ssl != NULL) {
         SSL_shutdown(m_ssl->m_ssl);
@@ -391,23 +407,43 @@ SecureSocket::initContext(bool server)
         showSecureLibInfo();
     }
 
-    // SSLv23_method uses TLSv1, with the ability to fall back to SSLv3
+    // TLS_*_method() negotiates the highest protocol version both ends support. The floor is
+    // pinned below.
     if (server) {
-        method = SSLv23_server_method();
+        method = TLS_server_method();
     }
     else {
-        method = SSLv23_client_method();
+        method = TLS_client_method();
     }
 
     // create new context from method
     SSL_METHOD* m = const_cast<SSL_METHOD*>(method);
     m_ssl->m_context = SSL_CTX_new(m);
 
-    // drop SSLv3 support
-    SSL_CTX_set_options(m_ssl->m_context, SSL_OP_NO_SSLv3);
-
     if (m_ssl->m_context == NULL) {
-        showError("");
+        showError("could not create ssl context");
+        return;
+    }
+
+    // Everything below is protocol hardening, not tuning. SSLv2/v3 and TLS 1.0/1.1 are broken,
+    // TLS-level compression enables CRIME, and this protocol never renegotiates. Both ends of a
+    // barrier link are built from this tree, so there is no old peer to accommodate.
+    if (SSL_CTX_set_min_proto_version(m_ssl->m_context, TLS1_2_VERSION) != 1) {
+        showError("could not set minimum ssl protocol version");
+    }
+
+    auto options = SSL_OP_NO_COMPRESSION | SSL_OP_CIPHER_SERVER_PREFERENCE;
+#ifdef SSL_OP_NO_RENEGOTIATION
+    options |= SSL_OP_NO_RENEGOTIATION;
+#endif
+    SSL_CTX_set_options(m_ssl->m_context, options);
+
+    if (SSL_CTX_set_cipher_list(m_ssl->m_context, s_tls12CipherList) != 1) {
+        showError("could not set ssl cipher list");
+    }
+
+    if (SSL_CTX_set_ciphersuites(m_ssl->m_context, s_tls13CipherSuites) != 1) {
+        showError("could not set ssl ciphersuites");
     }
 
     if (security_level_ == ConnectionSecurityLevel::ENCRYPTED_AUTHENTICATED) {
@@ -465,14 +501,14 @@ SecureSocket::secureAccept(int socket)
                 LOG((CLOG_INFO "accepted secure socket"));
                 if (!ensure_peer_certificate()) {
                     secure_accept_retry_ = 0;
-                    disconnect();
+                    abortHandshake();
                     return -1;// Cert fail, error
                 }
             }
             else {
                 LOG((CLOG_ERR "failed to verify server certificate fingerprint"));
                 secure_accept_retry_ = 0;
-                disconnect();
+                abortHandshake();
                 return -1; // Fingerprint failed, error
             }
         }
@@ -503,6 +539,10 @@ int
 SecureSocket::secureConnect(int socket)
 {
     // note that load_certificates acquires ssl_mutex_
+    // A CLI-only install has never run the GUI, so this may be the first thing
+    // that ever creates our certificate.
+    barrier::ensure_local_certificate();
+
     if (!load_certificates(barrier::DataDirectories::ssl_certificate_path())) {
         LOG((CLOG_ERR "could not load client certificates"));
         // FIXME: this is fatal error, but we current don't disconnect because whole logic in this
@@ -536,20 +576,22 @@ SecureSocket::secureConnect(int socket)
     }
 
     secure_connect_retry_ = 0;
-    // No error, set ready, process and return ok
-    m_secureReady = true;
     if (verify_cert_fingerprint(barrier::DataDirectories::trusted_servers_ssl_fingerprints_path())) {
         LOG((CLOG_INFO "connected to secure socket"));
         if (!ensure_peer_certificate()) {
-            disconnect();
+            abortHandshake();
             return -1;// Cert fail, error
         }
     }
     else {
         LOG((CLOG_ERR "failed to verify server certificate fingerprint"));
-        disconnect();
+        abortHandshake();
         return -1; // Fingerprint failed, error
     }
+
+    // only set ready once the peer has been verified, so that isSecureReady() can never be
+    // true for a peer whose fingerprint was not matched
+    m_secureReady = true;
     LOG((CLOG_DEBUG2 "connected secure socket"));
     if (CLOG->getFilter() >= kDEBUG1) {
         showSecureCipherInfo();
@@ -697,6 +739,21 @@ SecureSocket::disconnect()
     sendEvent(getEvents()->forISocket().stopRetry());
     sendEvent(getEvents()->forISocket().disconnected());
     sendEvent(getEvents()->forIStream().inputShutdown());
+}
+
+void
+SecureSocket::abortHandshake()
+{
+    // ssl_mutex_ is assumed to be acquired.
+    //
+    // disconnect() only posts events, so on its own it would leave the SSL session of an
+    // unverified peer alive and usable. close() can't be called from here: it would recurse
+    // into ssl_mutex_ and into the multiplexer that is currently servicing this socket, so
+    // free the SSL state directly instead. The socket itself is dropped by the caller
+    // returning failure, and both freeSSLResources() and close() remain safe afterwards.
+    isFatal(true);
+    freeSSLResourcesLocked();
+    disconnect();
 }
 
 bool SecureSocket::verify_cert_fingerprint(const barrier::fs::path& fingerprint_db_path)

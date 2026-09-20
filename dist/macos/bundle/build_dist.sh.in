@@ -55,12 +55,40 @@ if which -s brew ; then
     fi
 fi
 
+# Seal the bundle with an ad-hoc signature.
+#
+# macdeployqt leaves the app "linker-signed", which reports Info.plist=not
+# bound and Sealed Resources=none. Privacy & Security on recent macOS cannot
+# pin an Accessibility grant to a bundle like that, so the permission either
+# refuses to stick or cannot be added at all. Signing the whole bundle binds
+# the Info.plist and seals resources, which gives TCC a stable identity.
+#
+# This is an ad-hoc signature, not a Developer ID: it is enough for the system
+# to hold the permission on this machine, but the identity changes whenever the
+# binaries are rebuilt, so the grant may need to be re-applied after a rebuild.
+sign_bundle() {
+    info "Signing bundle (ad-hoc)"
+    codesign --force --deep --sign - \
+             --identifier "org.barrier-foss.barrier" \
+             --timestamp=none \
+             Barrier.app || { error "codesign failed"; exit 1; }
+
+    codesign --verify --deep --strict Barrier.app \
+        || { error "bundle failed signature verification"; exit 1; }
+    success "Bundle signed and verified"
+}
+
 # Use macdeployqt to include libraries and create dmg
 if [ "$B_BUILDTYPE" = "Release" ]; then
-    info "Building Release disk image (dmg)"
-    "$DEPLOYQT" Barrier.app -dmg \
+    info "Deploying Qt libraries"
+    "$DEPLOYQT" Barrier.app \
     -executable="$B_BARRIERC" \
     -executable="$B_BARRIERS" || exit 1
+
+    sign_bundle
+
+    info "Building Release disk image (dmg)"
+    "$DEPLOYQT" Barrier.app -dmg || exit 1
     mv "Barrier.dmg" "Barrier-$B_VERSION.dmg" || exit 1
     success "Created Barrier-$B_VERSION.dmg"
 else
@@ -69,5 +97,7 @@ else
     "$DEPLOYQT" Barrier.app -no-strip \
     -executable="$B_BARRIERC" \
     -executable="$B_BARRIERS" || exit 1
+
+    sign_bundle
     success "Bundle created successfully"
 fi

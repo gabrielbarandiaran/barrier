@@ -309,13 +309,14 @@ ServerProxy::parseMessage(const UInt8* code)
         setOptions();
     }
 
-    else if (memcmp(code, kMsgDFileTransfer, 4) == 0) {
-        fileChunkReceived();
+    else if (memcmp(code, kMsgDFileTransfer, 4) == 0 ||
+             memcmp(code, kMsgDDragInfo, 4) == 0) {
+        // Not supported. dragInfoReceived() in particular parsed a server
+        // supplied filename that could contain path separators and escape the
+        // drop directory on Windows.
+        LOG((CLOG_ERR "unsupported file transfer message from server"));
+        return kDisconnect;
     }
-    else if (memcmp(code, kMsgDDragInfo, 4) == 0) {
-        dragInfoReceived();
-    }
-
     else if (memcmp(code, kMsgCClose, 4) == 0) {
         // server wants us to hangup
         LOG((CLOG_DEBUG1 "recv close"));
@@ -610,7 +611,7 @@ ServerProxy::keyDown()
     // parse
     UInt16 id, mask, button;
     ProtocolUtil::readf(m_stream, kMsgDKeyDown + 4, &id, &mask, &button);
-    LOG((CLOG_DEBUG1 "recv key down id=0x%08x, mask=0x%04x, button=0x%04x", id, mask, button));
+    LOG((CLOG_DEBUG1 "recv key down mask=0x%04x, button=0x%04x", mask, button));
 
     // translate
     KeyID id2             = translateKey(static_cast<KeyID>(id));
@@ -634,7 +635,7 @@ ServerProxy::keyRepeat()
     UInt16 id, mask, count, button;
     ProtocolUtil::readf(m_stream, kMsgDKeyRepeat + 4,
                                 &id, &mask, &count, &button);
-    LOG((CLOG_DEBUG1 "recv key repeat id=0x%08x, mask=0x%04x, count=%d, button=0x%04x", id, mask, count, button));
+    LOG((CLOG_DEBUG1 "recv key repeat mask=0x%04x, count=%d, button=0x%04x", mask, count, button));
 
     // translate
     KeyID id2             = translateKey(static_cast<KeyID>(id));
@@ -657,7 +658,7 @@ ServerProxy::keyUp()
     // parse
     UInt16 id, mask, button;
     ProtocolUtil::readf(m_stream, kMsgDKeyUp + 4, &id, &mask, &button);
-    LOG((CLOG_DEBUG1 "recv key up id=0x%08x, mask=0x%04x, button=0x%04x", id, mask, button));
+    LOG((CLOG_DEBUG1 "recv key up mask=0x%04x, button=0x%04x", mask, button));
 
     // translate
     KeyID id2             = translateKey(static_cast<KeyID>(id));
@@ -821,7 +822,7 @@ ServerProxy::setOptions()
     m_client->setOptions(options);
 
     // update modifier table
-    for (UInt32 i = 0, n = (UInt32)options.size(); i < n; i += 2) {
+    for (UInt32 i = 0, n = (UInt32)options.size(); i + 1 < n; i += 2) {
         KeyModifierID id = kKeyModifierIDNull;
         if (options[i] == kOptionModifierMapForShift) {
             id = kKeyModifierIDShift;
@@ -847,9 +848,16 @@ ServerProxy::setOptions()
         }
 
         if (id != kKeyModifierIDNull) {
-            m_modifierTranslationTable[id] =
-                static_cast<KeyModifierID>(options[i + 1]);
-            LOG((CLOG_DEBUG1 "modifier %d mapped to %d", id, m_modifierTranslationTable[id]));
+            // options[i + 1] is a wire value; reject anything that would
+            // overrun s_translationTable/s_masks, which are indexed by it
+            if (options[i + 1] >= kKeyModifierIDLast) {
+                LOG((CLOG_WARN "ignoring out of range modifier mapping %d for %d", options[i + 1], id));
+            }
+            else {
+                m_modifierTranslationTable[id] =
+                    static_cast<KeyModifierID>(options[i + 1]);
+                LOG((CLOG_DEBUG1 "modifier %d mapped to %d", id, m_modifierTranslationTable[id]));
+            }
         }
     }
 }

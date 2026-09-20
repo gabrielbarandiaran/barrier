@@ -18,6 +18,7 @@
 
 #include "barrier/IClipboard.h"
 #include "common/stdvector.h"
+#include "base/Log.h"
 
 //
 // IClipboard
@@ -29,25 +30,44 @@ IClipboard::unmarshall(IClipboard* clipboard, const String& data, Time time)
     assert(clipboard != NULL);
 
     const char* index = data.data();
+    const char* end   = data.data() + data.size();
 
     if (clipboard->open(time)) {
         // clear existing data
         clipboard->empty();
 
         // read the number of formats
+        if (end - index < 4) {
+            LOG((CLOG_WARN "corrupted clipboard data: too short for format count"));
+            clipboard->close();
+            return;
+        }
         const UInt32 numFormats = readUInt32(index);
         index += 4;
 
         // read each format
         for (UInt32 i = 0; i < numFormats; ++i) {
             // get the format id
+            if (end - index < 4) {
+                LOG((CLOG_WARN "corrupted clipboard data: too short for format id"));
+                break;
+            }
             IClipboard::EFormat format =
                 static_cast<IClipboard::EFormat>(readUInt32(index));
             index += 4;
 
             // get the size of the format data
+            if (end - index < 4) {
+                LOG((CLOG_WARN "corrupted clipboard data: too short for format size"));
+                break;
+            }
             UInt32 size = readUInt32(index);
             index += 4;
+
+            if (size > (UInt32)(end - index)) {
+                LOG((CLOG_WARN "corrupted clipboard data: format size exceeds buffer"));
+                break;
+            }
 
             // save the data if it's a known format.  if either the client
             // or server supports more clipboard formats than the other

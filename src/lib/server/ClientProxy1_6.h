@@ -19,6 +19,8 @@
 
 #include "server/ClientProxy1_5.h"
 
+#include <string>
+
 class Server;
 class IEventQueue;
 
@@ -37,4 +39,9 @@ private:
 
 private:
     IEventQueue*        m_events;
+
+    // Per-connection clipboard reassembly buffer. This was a function-local
+    // static, i.e. shared by every connected client, which let one client
+    // corrupt or hijack another's in-flight clipboard transfer.
+    std::string         m_clipboardData;
 };

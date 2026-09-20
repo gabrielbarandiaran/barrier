@@ -18,6 +18,7 @@
 #include "SecureListenSocket.h"
 
 #include "SecureSocket.h"
+#include "SecureUtils.h"
 #include "net/NetworkAddress.h"
 #include "net/SocketMultiplexer.h"
 #include "arch/Arch.h"
@@ -31,6 +32,11 @@ SecureListenSocket::SecureListenSocket(IEventQueue* events, SocketMultiplexer* s
     TCPListenSocket(events, socketMultiplexer, family),
     security_level_{security_level}
 {
+    // Generate our certificate when the server starts listening rather than on
+    // the first connection, so that the fingerprint a user has to copy to the
+    // client exists as soon as the server is up. Only the Qt GUI used to do
+    // this, which left a command-line-only install with no certificate at all.
+    barrier::ensure_local_certificate();
 }
 
 IDataSocket*

@@ -9,9 +9,12 @@
     <string>barrier</string>
     <key>CFBundleIconFile</key>
     <string>Barrier.icns</string>
+    <!-- TCC (Privacy & Security) keys the Accessibility grant on the bundle
+         identifier, so this has to be a stable reverse-DNS string. It used to
+         be the bare word "barrier", which recent macOS will not hold a
+         permission against. //-->
     <key>CFBundleIdentifier</key>
-    <string>barrier</string>
-    <!-- TODO: Fix this in v2.0 //-->
+    <string>org.barrier-foss.barrier</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -24,6 +27,8 @@
     <string>@BARRIER_VERSION@</string>
     <key>CFBundleVersion</key>
     <string>@BARRIER_VERSION@</string>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Barrier reads this Mac's keyboard and trackpad so it can send them to your other computer.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>

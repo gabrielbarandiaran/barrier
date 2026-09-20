@@ -72,11 +72,17 @@ bool
 ClientProxy1_6::recvClipboard()
 {
     // parse message
-    static std::string dataCached;
     ClipboardID id;
     UInt32 seq;
 
-    int r = ClipboardChunk::assemble(getStream(), dataCached, id, seq);
+    int r = ClipboardChunk::assemble(getStream(), m_clipboardData, id, seq);
+
+    if (r == kError) {
+        // returning false makes handleData() drop the connection; swallowing
+        // the error let a client stream malformed chunks at us indefinitely.
+        LOG((CLOG_ERR "invalid clipboard data from client \"%s\"", getName().c_str()));
+        return false;
+    }
 
     if (r == kStart) {
         size_t size = ClipboardChunk::getExpectedSize();
@@ -84,9 +90,9 @@ ClientProxy1_6::recvClipboard()
     }
     else if (r == kFinish) {
         LOG((CLOG_DEBUG "received client \"%s\" clipboard %d seqnum=%d, size=%d",
-                getName().c_str(), id, seq, dataCached.size()));
+                getName().c_str(), id, seq, m_clipboardData.size()));
         // save clipboard
-        m_clipboard[id].m_clipboard.unmarshall(dataCached, 0);
+        m_clipboard[id].m_clipboard.unmarshall(m_clipboardData, 0);
         m_clipboard[id].m_sequenceNumber = seq;
 
         // notify

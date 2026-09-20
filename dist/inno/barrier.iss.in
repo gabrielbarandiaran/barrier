@@ -6,7 +6,6 @@
 #define MyAppCopyright "Copyright (C) 2018 Debauchee Open Source Group"
 #define MyAppExeName "barrier.exe"
 #define MyAppServiceName "Barrier"
-#define MyAppServiceExe "barrierd.exe"
 #define MyAppServiceDesc "Manages the Barrier background processes."
 #define MyAppListenerDesc "Barrier Listener"
 
@@ -50,13 +49,12 @@ Name: "{commonprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{commondesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-; there's no "check if exists" or "insert if not exists" for netsh's firewall commands
-; to avoid duplicate entries remove the existing rule (fails if it doesn't exist) before adding
-Filename: {sys}\netsh.exe; Parameters: "advfirewall firewall delete rule name=""{#MyAppListenerDesc}"""; Flags: runhidden
-Filename: {sys}\netsh.exe; Parameters: "advfirewall firewall add rule name=""{#MyAppListenerDesc}"" protocol=TCP dir=in localport=24800 action=allow"; Flags: runhidden
-Filename: {sys}\sc.exe; Parameters: "create {#MyAppServiceName} start= auto binPath= ""\""{app}\{#MyAppServiceExe}\"""""; Flags: runhidden
-Filename: {sys}\sc.exe; Parameters: "description {#MyAppServiceName} ""{#MyAppServiceDesc}"""; Flags: runhidden
-Filename: {sys}\sc.exe; Parameters: "start {#MyAppServiceName}"; Flags: runhidden
+; The Barrier background service is deliberately not installed. It ran as
+; LocalSystem and accepted commands, including an "elevate" flag, over an
+; unauthenticated loopback socket, which let any local user run code as SYSTEM.
+; No inbound firewall rule is added either: the client makes an outbound
+; connection and never listens. If you run a server on this machine, open port
+; 24800 yourself.
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
@@ -64,6 +62,7 @@ Type: filesandordirs; Name: "{commonappdata}\Barrier"
 
 [UninstallRun]
 Filename: {sys}\taskkill; Parameters: "/im {#MyAppExeName} /f /t"; Flags: runhidden
+; Remove the service and firewall rule left behind by older installs.
 Filename: {sys}\net.exe; Parameters: "stop {#MyAppServiceName}"; Flags: runhidden
 Filename: {sys}\sc.exe; Parameters: "delete {#MyAppServiceName}"; Flags: runhidden
 Filename: {sys}\netsh.exe; Parameters: "advfirewall firewall delete rule name=""{#MyAppListenerDesc}"""; Flags: runhidden
