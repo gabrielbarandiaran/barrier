@@ -38,6 +38,9 @@ it — add `-DBARRIER_BUILD_GUI=OFF` to build just the command-line tools.
 
 ## 2. Build on the Windows PC (client)
 
+> Full copy-paste instructions for this side, including troubleshooting, are in
+> [WINDOWS-CLIENT.md](WINDOWS-CLIENT.md). The short version follows.
+
 You need Visual Studio (2017 or newer) and CMake. You do **not** need Qt: the
 Windows side only runs the client, which takes one command line, so skip the
 GUI and skip the single most painful Windows dependency.
