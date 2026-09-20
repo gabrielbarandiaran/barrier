@@ -88,11 +88,17 @@ jobs:
       - name: Smoke test
         shell: pwsh
         run: |
-          # --version exits 3 by design (kExitArgs), so check the output, not
-          # the exit code. This proves the exe runs and found its DLLs.
+          # --version exits 3 by design (kExitArgs). Check the output rather
+          # than the exit code; this proves the exe starts and found its DLLs.
           $v = & dist-out/barrier-client/barrierc.exe --version 2>&1 | Out-String
           Write-Host $v
           if ($v -notmatch 'barrierc') { throw 'barrierc.exe did not run' }
+          if ($v -notmatch 'Protocol version') { throw 'unexpected --version output' }
+
+          # The Actions pwsh shell exits with $LASTEXITCODE, which is 3 here,
+          # so clear it or the step fails despite the checks above passing.
+          $global:LASTEXITCODE = 0
+          exit 0
 
       - uses: actions/upload-artifact@v4
         with:
