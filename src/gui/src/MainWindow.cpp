@@ -576,13 +576,11 @@ void MainWindow::startBarrier()
 #endif
     }
 
-#ifndef Q_OS_LINUX
-
-    if (m_ServerConfig.enableDragAndDrop()) {
-        args << "--enable-drag-drop";
-    }
-
-#endif
+    // Drag and drop is not supported: the receiving side refuses the file
+    // transfer messages outright, because that code path could be walked out
+    // of the drop directory on Windows and accumulated attacker data without
+    // limit. Passing the flag would only make the server send messages the
+    // client drops the connection over.
 
     if (!m_AppConfig->getCryptoEnabled()) {
         args << "--disable-crypto";
