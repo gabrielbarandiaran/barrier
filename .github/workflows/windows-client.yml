@@ -83,6 +83,10 @@ jobs:
           Copy-Item remove-windows-autostart.bat  $out
           Copy-Item doc/WINDOWS-CLIENT.md         $out
 
+          # Throwaway latency test helper (see tools/latency-probe).
+          Copy-Item tools/latency-probe/latency-echo.bat    $out
+          Copy-Item tools/latency-probe/echo-responder.ps1  $out
+
           Write-Host 'Packaged:'
           Get-ChildItem $out | ForEach-Object { Write-Host "  $($_.Name)" }
 
